@@ -1,0 +1,3 @@
+The purpose of this project is to read, understand and answer questions about .pdf or .docx files the user has uploaded. You can upload your file and ask specific questions about anything that is mentioned in your file.
+
+The app is working on text-only files for now but i am intending to extend it's capabilities to working with the same efficiency with tables, images or various file types in the future.
