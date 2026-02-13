@@ -6,7 +6,7 @@ import ollama
 import json
 
 max_tokens = 400
-
+db = []
 
 class Source:
     model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
@@ -98,18 +98,17 @@ class Source:
                 else:
                     block["type"] = "paragraph"
             blocks = self.blocks
+        Builder()
                             
 
         
 
 class Builder:
     def __init__(self):
-        pass
-
-    def semantic_chunker(self):
+        global db
         db = []
         chunks = []
-
+        page = 1
         current_title = []
         current_text = []
         for block in blocks:
@@ -162,18 +161,17 @@ class Builder:
                 "text": chunk["text"],
                 "metadata": chunk["metadata"]
             })
-        print("creating db...")
-        return db
 
 
 
 
 class RAG_bot():
-    def __init__(self, q, db):
+    def ___init__(self):
+        pass
+    def question(self, q):
+        self.db = db
         self.user_question = q
         self.query_vec = Source.model.encode(self.user_question)
-        self.db = db
-    def question(self):
         scores = []
         for item in self.db:
             score = cosine_similarity(
@@ -182,10 +180,10 @@ class RAG_bot():
             )[0][0]
             scores.append((score, item))
 
-        top_chunks = sorted(scores, reverse=True, key=lambda x: x[0])[:5]
+        top_chunks = sorted(scores, reverse=True, key=lambda x: x[0])[:7]
 
         context_text = "\n\n".join(
-            f"[{i+1}].\nSource: {item['metadata']["section_title"]} {item["metadata"]["page"]}\nContent: {item["text"]}"
+            f"{[i+1]}\nSource: {item['metadata']["section_title"]}\nContent: {item["text"]}"
             for i, (_, item) in enumerate(top_chunks)
         )
 
@@ -203,7 +201,7 @@ class RAG_bot():
 
 {{
 "answer": "your answer here",
-"sources": [0,1]
+"sources": [1,2]
 }}
 
         If there is no source you used, return your answer in this format:
@@ -235,19 +233,15 @@ class RAG_bot():
         try:
             parsed = json.loads(raw_output)
             source_pages = set()
-            if parsed["sources"]:
+            if "sources" in parsed.keys() and parsed["sources"]:
                 for s in parsed["sources"]:
                     source_pages.add(top_chunks[s-1][1]["metadata"]["page"])
-                return f"{parsed["answer"]}\nsource pages: {sorted(source_pages)}"
+
+                return {"answer": f"""{parsed["answer"]}
+                        Page: {sorted(source_pages)}"""}
             else:
-                return parsed["answer"]
-        except:
-            return "Please try asking this with different words."
+                return {"answer": parsed["answer"]}
+        except Exception as e:
+            return {"answer": f"Error:{e}\nPlease try asking this with different words."}
 
-
-# file = Source(url)
-# file.extract()
-
-# system = RAG_bot()
-# system.question(input("What is your question about your file ?: "))
 
