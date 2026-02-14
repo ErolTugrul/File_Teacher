@@ -4,12 +4,14 @@ from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
 import ollama
 import json
+import os
 
+hf_token = os.getenv("HF_TOKEN")
 max_tokens = 400
 db = []
 
 class Source:
-    model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+    model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2", token=hf_token)
     def __init__(self, file):
         self.file = file
                 
