@@ -1,7 +1,7 @@
-from .rag import Source, Builder, RAG_bot
+from .rag import SourceBuilder, Builder, RAGBot
 
 __all__ = [
-    "Source",
+    "SourceBuilder",
     "Builder",
-    "RAG_bot"
+    "RAGBot"
 ]
