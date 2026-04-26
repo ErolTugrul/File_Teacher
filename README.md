@@ -27,17 +27,17 @@ The project is designed for immediate deployment using Docker Compose. All envir
 
 To initialize the system for the first time, execute the following command in the project root:
 
-'''bash
+```bash
 docker-compose up --build -d
-'''
+```
 
 Note: The initial setup includes image construction and automated model retrieval. Depending on your hardware specifications and network bandwidth, this process may require approximately 10 to 15 minutes.
 
 Subsequent executions utilize cached images and persistent volumes, allowing for near-instant startup without rebuilding the entire infrastructure:
 
-'''bash
+```bash
 docker-compose up -d
-'''
+```
 
 Once the model is loaded, the application is accessible via the frontend service on port 5173. The system is optimized for environments with at least 8GB of dedicated RAM to ensure stable inference performance.
 
