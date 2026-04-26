@@ -1,21 +1,30 @@
 import pdfplumber
 import statistics
-from sentence_transformers import SentenceTransformer
-from sklearn.metrics.pairwise import cosine_similarity
-import ollama
-import json
 import os
+from ollama import Client
+import json
+from vector_store.vector_store import VectorDBManager
+import string
 
-hf_token = os.getenv("HF_TOKEN")
-max_tokens = 400
+max_tokens = 256
+vectordb = VectorDBManager()
 
+OLLAMA_URL = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434")
+client = Client(host=OLLAMA_URL)
+model_name = "mistral"
+
+try:
+    models = client.list()
+    if not any(m.model.startswith(model_name) for m in models.models):
+        print(f"Model {model_name} not found, downloading (This might take a while.)...")
+        client.pull(model_name)
+        print("Model downloaded successfully.")
+except Exception as e:
+    print(f"Error while connecting to Ollama or downloading model: {e}")
 
 class SourceBuilder:
-
     def __init__(self):
-        self.db = []
         self.blocks = []
-        self.model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2", token=hf_token)
 
     def extract(self, file=None):
         if not file:
@@ -62,6 +71,8 @@ class SourceBuilder:
                     score += 2
                 if text.endswith("."):
                     score -= 1
+                if text.count(".") > 5:
+                    score -= 2
                 elif text.endswith(":"):
                     score += 1
                 word_count = len(line)
@@ -73,6 +84,8 @@ class SourceBuilder:
                     score += 2
                 elif y > avg_gap * 2:
                     score -= 1
+                if  not all(c in string.ascii_letters + string.digits + string.punctuation + " _" for c in text[:-2]):
+                    score -= 2
 
                 self.blocks.append({
                     "type": "title" if score >= 6 else "paragraph",
@@ -81,13 +94,16 @@ class SourceBuilder:
                     "pg_num": line[0][0],
                 })
 
-    def builder(self):
+    def builder(self, file, filename):
         if not len(self.blocks):
-            self.extract()
+            self.extract(file=file)
+        else:
+            self.blocks=[]
+            self.extract(file=file)
 
         chunks = []
         page = 1
-        current_title = []
+        current_title = ""
         current_text = []
         for block in self.blocks:
             if block["type"] == "title":
@@ -102,11 +118,10 @@ class SourceBuilder:
                         }
                     })
                     current_text = []
-                    # current_title = []  # TODO is this necessary?
                 current_title = block["text"]
 
             elif block["type"] == "paragraph":
-                if (len(" ".join(current_text)) // 3.7) <= max_tokens - (len(block["text"]) // 3.7):
+                if (len(" ".join(current_text)) // 3.7) <= max_tokens - (len(block["text"]) // 3.7) - 60:
                     current_text.append(block["text"])
                 else:
                     chunks.append({
@@ -117,8 +132,8 @@ class SourceBuilder:
                             "source_type": "pdf"
                         }
                     })
+                    current_text = [" ".join(current_text)[-200:]]
                     current_text.append(block["text"])
-                    # current_text = []  # TODO is this necessary?
 
         if current_text:
             chunks.append({
@@ -130,54 +145,38 @@ class SourceBuilder:
                 }
             })
 
-        for chunk in chunks:
-            db.append({
-                "embedding": self.model.encode(chunk["text"]),
-                "text": chunk["text"],
-                "metadata": chunk["metadata"]
-            })
+        vectordb.add_chunks(chunks=chunks, file_id=filename)
 
 
 class RAGBot:
-    def __init__(self, builder: SourceBuilder):
-        self.builder = builder
-        self.db = builder.db
+    def __init__(self):
+        pass
 
-    def question(self, q):
-        user_question = q
-        query_vec = self.builder.model.encode(user_question)
-        scores = []
-        for item in self.db:
-            score = cosine_similarity(
-                [query_vec],
-                [item["embedding"]]
-            )[0][0]
-            scores.append((score, item))
-
-        top_chunks = sorted(scores, reverse=True, key=lambda x: x[0])[:7]
-
+    def question(self, question, file_ids):
+        top_chunks = vectordb.search(question, file_ids)
+    
         context_text = "\n\n".join(
-            f"{[i + 1]}\nSource: {item['metadata']["section_title"]}\nContent: {item["text"]}"
-            for i, (_, item) in enumerate(top_chunks)
-        )
-
+            f"[{i+1}]\nSource: {top_chunks["metadatas"][0][i]["section_title"]}\nContent: {top_chunks["documents"][0][i]}" 
+            for i in range(len(top_chunks["ids"][0])))
+              
         sys_prompt = """
 You are a helpful assistant.
 User will send you questions with context together.
 Answer the questions solely based on the context of the text and don't keep your answers too long.
 If there is no text to get your answers from, say "i didn't receive a context to learn".
 If the answer is not in the context, say "I don't know".
-Answer in 2–3 short paragraphs.
+Answer in 5 paragraphs maximum.
 Do not add information that is not explicitly stated in the context.
 When possible, quote short phrases from the context.
 Do not add the page number to the title names when you are mentioning titles.
 
-If you used a resource you MUST add it inside of this JSON format:
-
+If you used a resource you MUST answer in this format only:
 {
   "answer": "your answer here",
   "sources": [1, 2]
 }
+
+DO NOT use a statement like 'as stated in [x]' ever in the answer part of the format.
 
 If there is no source you used, return your answer in this format:
 {
@@ -189,10 +188,10 @@ Context:
 {context_text}
 
 Question:
-{user_question}
+{question}
 """
 
-        response = ollama.chat(
+        response = client.chat(
             model="mistral",
             format="json",
             options={
@@ -207,10 +206,10 @@ Question:
         raw_output = response["message"]["content"]
         try:
             parsed = json.loads(raw_output)
-            source_pages = set()
-            if "sources" in parsed.keys() and parsed["sources"]:
+            if "sources" in parsed.keys() and parsed["sources"] and len(file_ids) < 2:
+                source_pages = set()
                 for s in parsed["sources"]:
-                    source_pages.add(top_chunks[s - 1][1]["metadata"]["page"])
+                    source_pages.add(top_chunks["metadatas"][0][s-1]["page"])
 
                 ans = parsed["answer"]
                 ans += f'\nPage: {sorted(source_pages)}'

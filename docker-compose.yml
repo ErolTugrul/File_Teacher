@@ -1,0 +1,62 @@
+services:
+  # 1. REDIS
+  redis:
+      image: redis:7-alpine
+      ports:
+        - "6379:6379"
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    volumes:
+      - ollama_data:/root/.ollama
+    deploy:
+      resources:
+        reservations:
+          devices:
+          - driver: nvidia
+            count: 1
+            capabilities: [gpu]
+
+  # 2. FASTAPI SERVER
+  backend:
+    build: ./backend
+    ports:
+      - "8000:8000"
+    volumes:
+      # KODUN BURADA OLMALI: Değişikliklerin yansıması için asıl yer burası
+      - ./backend:/app
+    environment:
+      - PYTHONUNBUFFERED=1
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - OLLAMA_BASE_URL=http://ollama:11434
+    depends_on:
+      - redis
+      - ollama
+    # server.py kullandığın için komutu buna göre güncelledim
+    command: uvicorn server:app --host 0.0.0.0 --port 8000 --reload
+
+  # 3. CELERY WORKER
+  worker:
+    build: ./backend
+    # Senin özel komutunu buraya entegre ettik
+    volumes:
+      - ./backend:/app
+    command: celery -A celery_app.celery_file.app worker --loglevel=info -P threads -c 2
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+    depends_on:
+      - redis
+      - backend
+
+  # 4. REACT FRONTEND
+  frontend:
+    build: ./frontend
+    ports:
+      - "5173:5173"
+    depends_on:
+      - backend
+volumes:
+  ollama_data:

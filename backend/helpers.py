@@ -1,6 +1,5 @@
 import logging
 
-
 class HealthCheckFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
-        return "/health" not in record.getMessage()
+        return "/health" not in record.getMessage() and "/status" not in record.getMessage()

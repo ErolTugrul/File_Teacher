@@ -1,0 +1,15 @@
+*/pdfvenv/
+*/.vscode/
+
+#-- backend --
+backend/__pycache__/
+backend/vector_store/chromadb/
+backend/temp_files
+
+#-- frontend --
+frontend/node_modules/
+
+#-- general --
+.gitignore
+.dockerignore
+docker-compose.yml

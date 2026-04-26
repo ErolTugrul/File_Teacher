@@ -1,21 +1,23 @@
-import { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import axios from 'axios';
 
 function App() {
   const [isFileUploaded, setIsFileUploaded] = useState(false);
   const [isLoading, setIsLoading] = useState(false); 
-  const [loadingStatus, setLoadingStatus] = useState(""); // Kullanıcıya ne yapıldığını göstermek için
+  const [loadingStatus, setLoadingStatus] = useState("");
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const messagesEndRef = useRef(null);
   const [isBackendOnline, setIsBackendOnline] = useState(true);
+  const [currentMessage, setCurrentMessage] = useState("");
+
+  const [currentFileIds, setCurrentFileIds] = useState(null);
 
 
   const clearHistory = () => {
   if (messages.length === 0) return; 
   
   if (window.confirm("Are you sure you want to clear the chat history?")) {
-    // Sadece sohbet mesajlarını temizle, sistem mesajını (başarı mesajını) koru
     setMessages(prev => prev.filter(msg => msg.role === 'system')); 
   }
 };
@@ -26,12 +28,21 @@ function App() {
     scrollToBottom();
   }, [messages]);
 
-  const handleReset = () => {
-    setIsFileUploaded(false);
+const handleReset = async () => {
+    if (window.confirm("Are you sure? This will delete the previous files from the AI's memory.")) {
+      try {
+        await axios.post('http://localhost:8000/reset');
+        
+        setIsFileUploaded(false);
+        setMessages([]);
+      } catch (error) {
+        console.error("Reset error:", error);
+        alert("Failed to clear AI memory. Backend might be down.");
+      }
+    }
   };
 
   const [darkMode, setDarkMode] = useState(() => {
-    // İlk açılışta kullanıcının önceki tercihini kontrol et
     return localStorage.getItem('theme') === 'dark';
   });
 
@@ -43,48 +54,86 @@ function App() {
     }
   }, [darkMode]);
 
-  const handleFileUpload = async (e) => {
-    setIsLoading(true);
-
-    const file = e.target.files[0];
-    if (!file) return;
-
-    if (file.type === "text/plain" || file.name.endsWith(".txt")) {
-      alert("Invalid file format. Please select a PDF or DOCX file.");
-      e.target.value = ""; 
-      return;
-    }
-
-    // 1. Yükleme
-    setLoadingStatus("Uploading and processing document..."); // Ekranda görünecek yazı
-
+const handleFileUpload = async (e) => {
+  setIsLoading(true);
+  
+  const selectedFiles = Array.from(e.target.files);
+  if (selectedFiles.length === 0) {
+    setIsLoading(false);
+    return;
+  }
+  
+  const invalidFiles = selectedFiles.filter(file => !file.name.toLowerCase().endsWith(".pdf") && !file.name.toLowerCase().endsWith(".docx"));
+  if (invalidFiles.length > 0) {
+    alert("Invalid file format detected. Please select only PDF or DOCX files.");
+    e.target.value = ""; 
+    setIsLoading(false);
+    return;
+  }
+  
+  try {
+    setLoadingStatus(`Uploading and processing ${selectedFiles.length} documents...`);
+  
     const formData = new FormData();
-    formData.append('file', file);
+    selectedFiles.forEach(file => {
+      formData.append('files', file); 
+    });
 
-    try {
-      // 2. Backend'e istek atılıyor
-      await axios.post('http://localhost:8000/upload', formData);
-      
-      // 3. İşlem Başarılı
-      setIsFileUploaded(true);
-      
-      // Eski mesajları koru (...prev) ve yeni sistem mesajını altına ekle
-      setMessages(prev => [
-        ...prev, 
-        { 
-          role: 'system', 
-          content: `🔄 New document processed: "${file.name}". The AI is now answering based on this new file.` 
+    const response = await axios.post('http://localhost:8000/upload', formData);
+    const { task_ids } = response.data; 
+
+    setLoadingStatus("Processing files in AI database. Please wait...");
+    await checkTasksStatus(task_ids);
+
+    const names = selectedFiles.map(f => f.name); 
+    setCurrentFileIds(names); 
+
+    setIsFileUploaded(true);
+    
+    const fileNames = selectedFiles.map(f => f.name).join(', ');
+    setMessages(prev => [
+      ...prev, 
+      { 
+        role: 'system', 
+        content: `🔄 New documents processed: "${fileNames}". The AI is ready for your questions.` 
+      }
+    ]);
+    
+  } catch (error) {
+    console.error("Upload/Processing error:", error);
+    alert("An error occurred. Make sure Celery worker is running.");
+  } finally {
+    setIsLoading(false);
+    setLoadingStatus("");
+    e.target.value = ""; 
+  }
+};
+
+  const checkTasksStatus = async (taskIds) => {
+    return new Promise((resolve, reject) => {
+      const interval = setInterval(async () => {
+        try {
+          const statusRequests = taskIds.map(id => axios.get(`http://localhost:8000/status/${id}`));
+          const responses = await Promise.all(statusRequests);
+          
+          const allFinished = responses.every(res => res.data.status === "SUCCESS");
+          const anyFailed = responses.some(res => res.data.status === "FAILURE");
+
+          if (anyFailed) {
+            clearInterval(interval);
+            reject("Some files failed to process.");
+          }
+
+          if (allFinished) {
+            clearInterval(interval);
+            resolve();
+          }
+        } catch (error) {
+          clearInterval(interval);
+          reject(error);
         }
-      ]);
-      
-    } catch (error) {
-      console.error("Upload error:", error);
-      alert("An error occurred while processing the file.");
-      // Hata olsa bile eski mesajları silme
-    } finally {
-      setIsLoading(false);
-      setLoadingStatus("");
-    }
+      }, 2000); 
+    });
   };
 
     const checkConnection = async () => {
@@ -99,9 +148,9 @@ function App() {
     };
 
     useEffect(() => {
-    checkConnection(); // İlk açılışta kontrol et
-    const interval = setInterval(checkConnection, 5000); // 5 saniyede bir tekrarla
-    return () => clearInterval(interval); // Sayfa kapanınca durdur
+    checkConnection(); 
+    const interval = setInterval(checkConnection, 5000); 
+    return () => clearInterval(interval); 
   }, []);
 
   const handleSendMessage = async (e) => {
@@ -115,11 +164,12 @@ function App() {
 
   try {
     const response = await axios.post('http://localhost:8000/ask', { 
-      question: userMessage 
+      question: userMessage,
+      file_ids: currentFileIds
     });
 
-    // --- Hata Ayıklama Bölümü ---
-    console.log("Backend'den gelen ham veri:", response.data);
+    // --- DEBUGGING ---
+    console.log("Received backend data:", response.data);
 
     let botReplyContent = "";
 
@@ -157,7 +207,6 @@ function App() {
           darkMode ? 'bg-zinc-900 border-b border-zinc-800' : 'bg-slate-800'
         }`}>
           
-          {/* Sol Kısım: Işık ve Başlık */}
           <div className="flex items-center gap-3">
             <div className={`w-3 h-3 rounded-full transition-all duration-500 ${
               isBackendOnline 
@@ -169,10 +218,9 @@ function App() {
             </h1>
           </div>
 
-          {/* Sağ Kısım: Aksiyon Butonları */}
           <div className="flex items-center gap-2">
             
-            {/* 1. TEMA DEĞİŞTİRME BUTONU */}
+            {/* 1. THEME CHANGE */}
             <button 
               onClick={() => setDarkMode(!darkMode)}
               className={`p-2 rounded-lg transition-colors ${
@@ -185,7 +233,7 @@ function App() {
 
             {isFileUploaded && (
               <>
-                {/* 2. CLEAR CHAT BUTONU (HESABA KATILDI) */}
+                {/* 2. CLEAR CHAT BUTTON */}
                 <button 
                   onClick={clearHistory}
                   disabled={isLoading}
@@ -199,7 +247,7 @@ function App() {
                   Clear chat
                 </button>
 
-                {/* 3. NEW FILE BUTONU */}
+                {/* 3. NEW FILE BUTTON */}
                 <button 
                   onClick={handleReset}
                   className={`text-xs py-2 px-3 rounded-lg font-medium transition-all ${
@@ -220,16 +268,12 @@ function App() {
     (darkMode && isLoading) ? 'bg-zinc-900' : (darkMode ? 'bg-zinc-800' : 'bg-gray-50')
   }`}>
     
-    {/* Eğer yükleniyorsa SPINNER göster, yoksa FORM göster */}
     {isLoading ? (
       /* --- PROCESSING STATE --- */
       <div className="flex flex-col items-center justify-center text-center">
         <div className="relative w-24 h-24 mx-auto mb-6">
-          {/* Dış Halka */}
           <div className={`absolute inset-0 border-4 rounded-full ${darkMode ? 'border-zinc-700' : 'border-gray-200'}`}></div>
-          {/* Dönen Halka */}
           <div className="absolute inset-0 border-4 border-blue-500 rounded-full border-t-transparent animate-spin"></div>
-          {/* İkon */}
           <div className="absolute inset-0 flex items-center justify-center">
             <svg className="w-8 h-8 text-blue-500 animate-bounce" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"></path>
@@ -268,7 +312,7 @@ function App() {
           <span className={`font-medium group-hover:scale-105 transition-transform ${darkMode ? 'text-zinc-200' : 'text-blue-600'}`}>
             Select a File
           </span>
-          <input type='file' className="hidden" onChange={handleFileUpload} accept=".pdf,.docx,.doc" />
+          <input type='file' className="hidden" onChange={handleFileUpload} accept=".pdf,.docx,.doc" multiple />
         </label>
       </>
     )}
@@ -287,14 +331,13 @@ function App() {
                     msg.role === 'user' 
                       ? 'bg-blue-600 text-white' 
                       : darkMode 
-                        ? 'bg-zinc-800 text-zinc-200 border border-zinc-700' // Dark Bot
-                        : 'bg-gray-100 text-gray-800 border border-gray-200' // Light Bot
+                        ? 'bg-zinc-800 text-zinc-200 border border-zinc-700' 
+                        : 'bg-gray-100 text-gray-800 border border-gray-200' 
                   }`}>
                     {msg.content}
                   </div>
                 </div>
               ))}
-              {/* Chat içi yükleniyor animasyonu */}
               {isLoading && (
                  <div className="flex justify-start">
                     <div className="bg-gray-100 p-4 rounded-2xl rounded-bl-none border border-gray-200 flex space-x-2 items-center">
