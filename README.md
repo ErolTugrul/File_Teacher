@@ -27,7 +27,7 @@ The project is designed for immediate deployment using Docker Compose. All envir
 
 To initialize the system for the first time, execute the following command in the project root:
 
-'''shell
+'''bash
 docker-compose up --build -d
 '''
 
@@ -35,7 +35,7 @@ Note: The initial setup includes image construction and automated model retrieva
 
 Subsequent executions utilize cached images and persistent volumes, allowing for near-instant startup without rebuilding the entire infrastructure:
 
-'''shell
+'''bash
 docker-compose up -d
 '''
 
